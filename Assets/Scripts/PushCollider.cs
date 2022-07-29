@@ -6,13 +6,13 @@ public class PushCollider : MonoBehaviour
 {
     [SerializeField] private Vector3 _ConstantForce;
     [SerializeField] private string _Tag;
-    private Dictionary<GameObject,Rigidbody> _rbs = new Dictionary<GameObject, Rigidbody>();
+    private Dictionary<GameObject, PlayerController> _rbs = new Dictionary<GameObject, PlayerController>();
 
     private void FixedUpdate()
     {
-        foreach(KeyValuePair<GameObject,Rigidbody> pair in _rbs)
+        foreach(KeyValuePair<GameObject,PlayerController> pair in _rbs)
         {
-            pair.Value.AddForce(_ConstantForce);
+            pair.Value.AddForce(IntVector3D.Convert(_ConstantForce,1),ForceMode.Force);
         }
     }
 
@@ -20,7 +20,7 @@ public class PushCollider : MonoBehaviour
     {
         if(other.tag == _Tag && !_rbs.ContainsKey(other.gameObject))
         {
-            _rbs.Add(other.gameObject,other.GetComponent<Rigidbody>());
+            _rbs.Add(other.gameObject,other.GetComponent<PlayerController>());
         }
     }
 

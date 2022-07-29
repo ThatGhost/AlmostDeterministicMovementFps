@@ -6,6 +6,10 @@ using Utils;
 public class PlayerController : MonoBehaviour
 {
     Rigidbody _rb;
+    CapsuleCollider _coll;
+
+    public int ForceScale
+    { get { return _ForceScale; } }
 
     [Header("General")]
     [SerializeField] private int _ForceScale;
@@ -45,6 +49,9 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private int _RunningDecel;
     [SerializeField] private AnimationCurve _RunningSnappyness;
 
+    [Header("Crouching")]
+    [SerializeField] private int _CrouchingFactor;
+
     private IntVector3D _velocity = IntVector3D.zero;
     private IntVector3D _position = IntVector3D.zero;
     private float _RotationX=0;
@@ -53,14 +60,18 @@ public class PlayerController : MonoBehaviour
     private Deque<uint> _InputQueue = new Deque<uint>();
     private bool _Grounded = false;
     private bool _Jumping = false;
+    private bool _Crouching = false;
+    private bool _Loose = false;
     private Vector3 _ScaleVector;
 
     private Dictionary<GameObject, ContactPoint[]> _Collisions = new Dictionary<GameObject, ContactPoint[]>();
+    private List<KeyValuePair<IntVector3D, ForceMode>> _AdditiveForcesBuffer = new List<KeyValuePair<IntVector3D, ForceMode>>();
 
     private void Awake()
     {
         Cursor.lockState = CursorLockMode.Locked;
         _rb = GetComponent<Rigidbody>();
+        _coll = GetComponent<CapsuleCollider>();
         _CamTran = Camera.main.transform;
         _ScaleVector = new Vector3(1f / _ForceScale, 1f / _ForceScale, 1f / _ForceScale);
         Vector3 currentpos = transform.position;
@@ -91,37 +102,113 @@ public class PlayerController : MonoBehaviour
                                       ((input & (uint)InputType.Down) != 0 ? -1 : 0) + ((input & (uint)InputType.Up) != 0 ? 1 : 0));
         inputdir = (transform.forward * inputdir.z) + (transform.right * inputdir.x);
 
+        bool crouching = (input & (uint)InputType.Crouching) != 0;
         bool running = (input & (uint)InputType.Running) != 0;
+
+        if(!crouching && _Crouching)
+        {
+            Ray ray = new Ray(transform.position, Vector3.up);
+            if (Physics.Raycast(ray, 1.2f))
+            {
+                crouching = true;
+            }
+            else
+            {
+                _coll.height = 2;
+                _coll.center += new Vector3(0,0.5f,0);
+                _CamTran.position += new Vector3(0, 0.5f, 0);
+            }
+        }
+        else if(crouching && !_Crouching)
+        {
+            _coll.height = 1;
+            _coll.center += new Vector3(0, -0.5f, 0);
+            _CamTran.position += new Vector3(0,-0.5f,0);
+        }
+
+        _Crouching = crouching;
 
         //making wish direction
         IntVector3D WishDir = new IntVector3D((int)(inputdir.x * _ForceScale), 0, (int)(inputdir.z * _ForceScale));
 
         if (WishDir.magnitude() > _ForceScale)
             WishDir = WishDir.normilized();
-        WishDir *= !running ? _WalkingForce : _RunningForce;
+        WishDir *= crouching ? (!running ? _WalkingForce : _RunningForce) / _CrouchingFactor : !running ? _WalkingForce : _RunningForce;
 
-        Debug.Log($"wishdir: {WishDir}, velocity {_velocity}, eval {_RunningSnappyness.Evaluate(_velocity.flattened.normilized().dot(WishDir.normilized()) / _ForceScale)}, dot {_velocity.flattened.normilized().dot(WishDir.normilized())/_ForceScale}");
+        //Debug.Log($"wishdir: {WishDir}, velocity {_velocity}, eval {_RunningSnappyness.Evaluate(_velocity.flattened.normilized().dot(WishDir.normilized()) / _ForceScale)}, dot {_velocity.flattened.normilized().dot(WishDir.normilized())/_ForceScale}");
 
         //acceliration - decceliration
         IntVector3D newVel;
         if (WishDir != IntVector3D.zero)
         {
-            newVel = _velocity.flattened.MoveTowards(WishDir, !running ? _WalkingAccel : _RunningAccel, _ForceScale);// *
-                                                    //(int)(running ?
-                                                    //_RunningSnappyness.Evaluate(WishDir.dot(_velocity.flattened)) / _ForceScale :
-                                                    //_WalkingSnappyness.Evaluate(WishDir.dot(_velocity.flattened)) / _ForceScale)
-                                                    ///_ForceScale);
+            if (crouching)
+            {
+                newVel = _velocity.flattened.MoveTowards(WishDir, (!running ? _WalkingAccel : _RunningAccel)*_CrouchingFactor, _ForceScale);
+
+            }
+            else if (running)
+            {
+                newVel = _velocity.flattened.MoveTowards(WishDir, _RunningAccel, _ForceScale);
+
+            }
+            else
+            {
+                newVel = _velocity.flattened.MoveTowards(WishDir, _WalkingAccel, _ForceScale);
+            }
+
+            //(int)(running ?
+            //_RunningSnappyness.Evaluate(_velocity.flattened.normilized().dot(WishDir.normilized()) / _ForceScale) :
+            //_RunningSnappyness.Evaluate(_velocity.flattened.normilized().dot(WishDir.normilized()) / _ForceScale))
+            ///_ForceScale);
         }
         else
         {
-            newVel = _velocity.flattened.MoveTowards(IntVector3D.zero, !running ? _WalkingDecel : _RunningDecel, _ForceScale);
+            if (crouching)
+            {
+                newVel = _velocity.flattened.MoveTowards(IntVector3D.zero, (!running ? _WalkingDecel : _RunningDecel)/_CrouchingFactor, _ForceScale);
+
+            }
+            else if (running)
+            {
+                newVel = _velocity.flattened.MoveTowards(IntVector3D.zero, _RunningDecel, _ForceScale);
+
+            }
+            else
+            {
+                newVel = _velocity.flattened.MoveTowards(IntVector3D.zero, _WalkingDecel, _ForceScale);
+            }
+
+            //(int)(running ?
+            //_RunningSnappyness.Evaluate(_velocity.flattened.normilized().dot(WishDir.normilized()) / _ForceScale) :
+            //_RunningSnappyness.Evaluate(_velocity.flattened.normilized().dot(WishDir.normilized()) / _ForceScale))
+            /// _ForceScale);
         }
 
         _velocity = new IntVector3D( newVel.x, _velocity.y, newVel.z);
 
-        if (_velocity.magnitude() > (running ? _RunningMaxSpeed : _WalkingMaxSpeed))
+        if(_Grounded && !_Loose)
         {
-            _velocity.AddAsFlattened(_velocity.flattened.normilized() * (running ? _RunningMaxSpeed : _WalkingMaxSpeed));
+            if (crouching)
+            {
+                if (_velocity.magnitude() > ((running ? _RunningMaxSpeed : _WalkingMaxSpeed) / _CrouchingFactor))
+                {
+                    _velocity.AddAsFlattened(_velocity.flattened.normilized() * ((running ? _RunningMaxSpeed : _WalkingMaxSpeed) / _CrouchingFactor));
+                }
+            }
+            else if (running)
+            {
+                if (_velocity.magnitude() > _RunningMaxSpeed)
+                {
+                    _velocity.AddAsFlattened(_velocity.flattened.normilized() * _RunningMaxSpeed);
+                }
+            }
+            else
+            {
+                if (_velocity.magnitude() > _WalkingMaxSpeed)
+                {
+                    _velocity.AddAsFlattened(_velocity.flattened.normilized() * _WalkingMaxSpeed);
+                }
+            }
         }
 
         //Jump
@@ -134,8 +221,10 @@ public class PlayerController : MonoBehaviour
 
     private void NextPhysicsStep()
     {
+        AddForces();
         CheckCollisions();
         VerticalPhysics();
+        Debug.Log(_velocity +" , mag:" +_velocity.magnitude());
         _position += (_velocity / 40);
     }
 
@@ -151,7 +240,6 @@ public class PlayerController : MonoBehaviour
                 if(_velocity.dot(normal) < 0)
                 {
                     IntVector3D newVel = IntVector3D.Project(_velocity.flattened, surface);
-                    //print($"surface: {surface}, newVel {newVel}");
                     _velocity = new IntVector3D(newVel.x,_velocity.y,newVel.z);
                 }
             }
@@ -164,6 +252,8 @@ public class PlayerController : MonoBehaviour
 
         if(_velocity.y < _MaxDownwardsSpeed)
             _velocity.y = _MaxDownwardsSpeed;
+        if(_velocity.y > -_MaxDownwardsSpeed && !_Loose)
+            _velocity.y = -_MaxDownwardsSpeed;
 
         //push character upwards
         Ray[] rays = new Ray[]{ 
@@ -182,10 +272,14 @@ public class PlayerController : MonoBehaviour
             && !hit.collider.isTrigger)
         {
             _Grounded = true;
+
+            if(_Loose && _velocity.y < 0)
+                _Loose = false;
+
             int distance = IntVector3D.Convert(_Feet.position, _ForceScale).y - IntVector3D.Convert(hit.point, _ForceScale).y;
             distance /= _HoverHeight/_ForceScale;
 
-            if((distance < _HoverMinHeight && _velocity.y < 0) || (_velocity.flattened.magnitude() < _StandLimit && !_Jumping))
+            if((distance < _HoverMinHeight && _velocity.y < 0) || (_velocity.flattened.magnitude() < _StandLimit && !_Jumping && !_Loose))
             {
                 _velocity.y = 0;
             }
@@ -210,7 +304,7 @@ public class PlayerController : MonoBehaviour
 
         //Stop going up when colliding with roof
         Ray ray = new Ray(transform.position + new Vector3(0,1,0), Vector3.up);
-        if(Physics.Raycast(ray, 0.2f) && _velocity.y > 0)
+        if(Physics.Raycast(ray, out RaycastHit hit2,0.2f) && _velocity.y > 0 && !hit2.collider.isTrigger)
         {
             _velocity.y = 0;
         }
@@ -275,6 +369,33 @@ public class PlayerController : MonoBehaviour
         transform.rotation *= Quaternion.Euler(0, Input.GetAxis("Mouse X") * _LookSpeed * Time.deltaTime, 0);
     }
 
+    private void AddForces()
+    {
+        foreach(KeyValuePair<IntVector3D,ForceMode> pair in _AdditiveForcesBuffer)
+        {
+            switch (pair.Value)
+            {
+                case ForceMode.Force:
+                    _velocity += pair.Key;
+                    break;
+                case ForceMode.Impulse:
+                    _velocity = pair.Key;
+                    
+                    _Loose = true;
+                    break;
+                default:
+                    Debug.LogError("ForceMode type not Defined");
+                    break;
+            }
+        }
+        _AdditiveForcesBuffer.Clear();
+    }
+
+    public void AddForce(IntVector3D force, ForceMode forcemode)
+    {
+        _AdditiveForcesBuffer.Add(new KeyValuePair<IntVector3D,ForceMode>(force,forcemode));
+    }
+
 #if UNITY_EDITOR
 
     private void OnDrawGizmos()
@@ -289,6 +410,8 @@ public class PlayerController : MonoBehaviour
 
         //head
         Gizmos.DrawLine(transform.position + new Vector3(0, _FeetDistance, 0),transform.position + new Vector3(0,1.5f,0));
+        if(_Crouching)
+            Gizmos.DrawLine(transform.position + new Vector3(0.2f, 0, 0.2f), transform.position + new Vector3(0.2f, 0, 0.2f) + Vector3.up);
     }
 
 #endif
@@ -318,6 +441,7 @@ public enum InputType : uint
     Interact = 32_768,
 }
 
+[Serializable]
 public struct IntVector3D
 {
     public int x;
