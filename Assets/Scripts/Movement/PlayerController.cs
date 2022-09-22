@@ -224,7 +224,6 @@ public class PlayerController : MonoBehaviour
         AddForces();
         CheckCollisions();
         VerticalPhysics();
-        Debug.Log(_velocity +" , mag:" +_velocity.magnitude());
         _position += (_velocity / 40);
     }
 
@@ -317,11 +316,13 @@ public class PlayerController : MonoBehaviour
 
     private void OnCollisionEnter(Collision collision)
     {
-        _Collisions.Add(collision.gameObject, collision.contacts);
+        if(!collision.collider.isTrigger)
+            _Collisions.Add(collision.gameObject, collision.contacts);
     }
     private void OnCollisionExit(Collision collision)
     {
-        _Collisions.Remove(collision.gameObject);
+        if (!collision.collider.isTrigger && _Collisions.ContainsKey(collision.gameObject))
+            _Collisions.Remove(collision.gameObject);
     }
 
     private void RecordInput()
@@ -360,7 +361,7 @@ public class PlayerController : MonoBehaviour
         _InputQueue.AddToFront(input);
     }
 
-    void HandleMouse()
+    private void HandleMouse()
     {
         _RotationX += -Input.GetAxis("Mouse Y") * _LookSpeed * Time.deltaTime;
         _RotationX = Mathf.Clamp(_RotationX, -_LookLimit, _LookLimit);
